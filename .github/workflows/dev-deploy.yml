@@ -2,7 +2,7 @@ name: CI Dev Deployment
 
 on:
   push:
-    branches: [ master ]   # 每次 push 到 main 時觸發
+    branches: [ master ]   # 每次 push 到 master 時觸發
 
 jobs:
   build:
@@ -30,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev           # 指定 dev 環境（使用 vars 與 secrets）
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
