@@ -158,12 +158,15 @@ jobs:
           echo "created: $TAG"
 
       - name: Notify Slack (staging)
-        if: ${{ secrets.SLACK_WEBHOOK_STAGING }}
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_STAGING }}
         run: |
-          payload='{"text":"Staging release created: '${{ steps.tagstg.outputs.tag }}'"}'
-          curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK"
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            payload='{"text":"Staging release created: '${{ steps.tagstg.outputs.tag }}'"}'
+            curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK"
+          else
+            echo "⚠️ No Slack webhook configured for staging, skipping notification."
+          fi
 
 # ----------------------------
 # 5) Deploy to Production (requires environment approval)
