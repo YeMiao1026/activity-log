@@ -41,5 +41,7 @@ jobs:
           TAG: ${{ vars.BUILD_TAG }}
           NOTE: ${{ vars.RELEASE_NOTE }}
         run: |
+          NOTE="$NOTE_BASE - Deployed on $(date)"
           echo "Releasing Dev Build: $TAG"
           gh release create "$TAG" build.zip --notes "$NOTE"
+          echo "✅ Successfully released $TAG"
