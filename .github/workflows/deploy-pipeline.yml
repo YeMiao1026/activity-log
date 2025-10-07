@@ -1,0 +1,87 @@
+name: CI/CD Deployment Pipeline
+
+on:
+  workflow_dispatch:   # 改為手動觸發，可控制測試順序
+
+jobs:
+  # ─────────────────────────────
+  # 1️⃣ BUILD JOB
+  # ─────────────────────────────
+  build:
+    name: Build and Archive
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Simulated Build
+        run: |
+          echo "🔧 Simulating build..."
+          mkdir dist
+          echo "Hello from CI/CD Pipeline!" > dist/index.html
+          zip -r build.zip dist
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: build.zip
+
+  # ─────────────────────────────
+  # 2️⃣ STAGING DEPLOYMENT
+  # ─────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Release Staging Build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ vars.BUILD_TAG }}
+          NOTE_BASE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          NOTE="$NOTE_BASE - Testing pre-production release on $(date)"
+          echo "🚀 Deploying to staging environment..."
+          gh release create "$TAG" build.zip --notes "$NOTE"
+          echo "✅ Successfully released $TAG to staging"
+
+  # ─────────────────────────────
+  # 3️⃣ PRODUCTION DEPLOYMENT
+  # ─────────────────────────────
+  deploy-production:
+    name: Deploy to Production
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production     # 使用已設 reviewer 的環境
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Release Production Build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ vars.BUILD_TAG }}
+          NOTE_BASE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          NOTE="$NOTE_BASE - Production release on $(date)"
+          echo "🚀 Deploying to production..."
+          gh release create "$TAG" build.zip --notes "$NOTE"
+          echo "🎉 Production release completed: $TAG"
