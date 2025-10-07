@@ -20,7 +20,7 @@ jobs:
       - name: Simulated Build
         run: |
           echo "🔧 Simulating build..."
-          mkdir dist
+          mkdir -p dist
           echo "Hello from CI/CD Pipeline!" > dist/index.html
           zip -r build.zip dist
 
