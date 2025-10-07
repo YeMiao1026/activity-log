@@ -208,12 +208,16 @@ jobs:
           echo "created: $TAG"
 
       - name: Notify Slack (production)
-        if: ${{ secrets.SLACK_WEBHOOK_PROD }}
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_PROD }}
         run: |
-          payload='{"text":"Production release published: '${{ steps.tagprod.outputs.tag }}'"}'
-          curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK"
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            payload='{"text":"Production release published: '${{ steps.tagprod.outputs.tag }}'"}'
+            curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK"
+          else
+            echo "⚠️ No Slack webhook configured for staging, skipping notification."
+          fi
+
 
 # ----------------------------
 # 6) Rollback / cleanup (runs always; deletes failed incomplete release if any)
