@@ -1,0 +1,251 @@
+name: CI/CD Advanced Pipeline (with Automated Tests)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'semantic bump (major/minor/patch) or none'
+        required: false
+        default: 'patch'
+
+jobs:
+  # ----------------------------
+  # 1) Test matrix - simulate lint & unit test
+  # ----------------------------
+  test:
+    name: Matrix Tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Simulated lint
+        run: echo "✅ Lint passed on Node ${{ matrix.node }}"
+
+      - name: Simulated basic tests
+        run: echo "✅ Unit tests passed on Node ${{ matrix.node }}"
+
+  # ----------------------------
+  # 2) Build stage
+  # ----------------------------
+  build:
+    name: Build Artifact
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.getver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install
+        run: npm install
+
+      - name: Build project
+        run: |
+          echo "⚙️ Building project..."
+          mkdir -p dist
+          echo "<h1>CI/CD Build</h1>" > dist/index.html
+          zip -r build.zip dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: build.zip
+
+      - name: Get version from package.json or git
+        id: getver
+        run: |
+          if [ -f package.json ]; then
+            ver=$(node -p "require('./package.json').version")
+            echo "version=$ver" >> $GITHUB_OUTPUT
+          else
+            ver=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+            echo "version=$ver" >> $GITHUB_OUTPUT
+          fi
+
+  # ----------------------------
+  # 3) Automated test job (real gate)
+  # ----------------------------
+  automated-tests:
+    name: Automated Tests (real gate)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run automated tests
+        run: |
+          echo "🧪 Running automated tests..."
+          npm test || (echo "❌ Tests failed! Blocking deployment." && exit 1)
+
+  # ----------------------------
+  # 4) Optional semantic bump
+  # ----------------------------
+  bump:
+    name: Semantic bump (optional)
+    needs: automated-tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.bump != 'none' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        env:
+          BUMP: ${{ github.event.inputs.bump }}
+        run: |
+          npm version $BUMP -m "chore(release): %s [skip ci]"
+
+      - name: Push tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git push origin HEAD --follow-tags
+
+  # ----------------------------
+  # 5) Deploy to Staging
+  # ----------------------------
+  deploy-staging:
+    name: Deploy → Staging
+    needs: [automated-tests, bump]
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Prepare tag
+        id: tagstg
+        run: |
+          if [ -f package.json ]; then
+            ver=$(node -p "require('./package.json').version")
+          else
+            ver=${{ needs.build.outputs.version }}
+          fi
+          TAG="staging-v${ver}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create staging release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTE_BASE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          TAG="${{ steps.tagstg.outputs.tag }}"
+          NOTE="$NOTE_BASE - Testing pre-production release on $(date -u)"
+          gh release create "$TAG" build.zip --notes "$NOTE"
+
+      - name: Notify Slack (staging)
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_STAGING }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            payload='{"text":"Staging release created: '${{ steps.tagstg.outputs.tag }}'"}'
+            curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK"
+          else
+            echo "⚠️ No Slack webhook configured for staging."
+          fi
+
+  # ----------------------------
+  # 6) Deploy to Production (requires approval)
+  # ----------------------------
+  deploy-production:
+    name: Deploy → Production
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Prepare prod tag
+        id: tagprod
+        run: |
+          if [ -f package.json ]; then
+            ver=$(node -p "require('./package.json').version")
+          else
+            ver=${{ needs.build.outputs.version }}
+          fi
+          TAG="prod-v${ver}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create production release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTE_BASE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          TAG="${{ steps.tagprod.outputs.tag }}"
+          NOTE="$NOTE_BASE - Production release on $(date -u)"
+          gh release create "$TAG" build.zip --notes "$NOTE"
+
+      - name: Notify Slack (production)
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_PROD }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            payload='{"text":"Production release published: '${{ steps.tagprod.outputs.tag }}'"}'
+            curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK"
+          else
+            echo "⚠️ No Slack webhook configured for production."
+          fi
+
+  # ----------------------------
+  # 7) Cleanup on failure
+  # ----------------------------
+  cleanup:
+    name: Cleanup on failure
+    needs: [deploy-staging, deploy-production]
+    runs-on: ubuntu-latest
+    if: ${{ failure() }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete failed releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Pipeline failed — cleaning up partial releases"
+          for t in $(gh release list --limit 50 --json tagName --jq '.[].tagName'); do
+            if [[ "$t" == staging-v* || "$t" == prod-v* ]]; then
+              gh release delete -y "$t" || true
+              git push origin --delete "$t" || true
+            fi
+          done
